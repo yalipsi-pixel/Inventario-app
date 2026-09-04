@@ -303,3 +303,21 @@ else:
     with tab2:
         st.markdown("### Historial de Movimientos / Aplicaciones")
         st.dataframe(st.session_state.movimientos, use_container_width=True)
+        # --- BOTÓN PARA DESCARGAR EL INVENTARIO EN EXCEL ---
+st.markdown("---")
+st.subheader("📊 Exportar Datos")
+
+# Convertir el DataFrame de inventario a Excel en memoria
+import io
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    st.session_state.inventario.to_excel(writer, index=False, sheet_name='Inventario_Actual')
+    st.session_state.movimientos.to_excel(writer, index=False, sheet_name='Movimientos')
+excel_data = output.getvalue()
+
+st.download_button(
+    label="📥 Descargar Base de Datos Completa (Excel)",
+    data=excel_data,
+    file_name="Inventario_Servicios_Cumbre.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
