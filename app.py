@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # RESTAURACIÓN DEL LOGO
-ruta_logo = "LOGO CUMBRE_2.jpg" 
+ruta_logo = "LOGO CUMBRE_2.jpg"
 if os.path.exists(ruta_logo):
     st.image(ruta_logo, width=250)
 else:
