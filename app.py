@@ -6,6 +6,16 @@ import streamlit as st
 EXCEL_FILE = 'inventario_cumbre.xlsx'
 LOGO_FILE = 'LOGO CUMBRE_2.jpg'
 
+COLUMNAS_OBLIGATORIAS = [
+    'SKU',
+    'Producto',
+    'Categoría',
+    'Stock',
+    'Unidad',
+    'Bodega',
+    'Proveedor',
+]
+
 
 def cargar_datos():
   if not os.path.exists(EXCEL_FILE):
@@ -27,6 +37,14 @@ def cargar_datos():
     df.to_excel(EXCEL_FILE, index=False)
   else:
     df = pd.read_excel(EXCEL_FILE)
+    # Validar que todas las columnas existan para evitar errores
+    for col in COLUMNAS_OBLIGATORIAS:
+      if col not in df.columns:
+        if col == 'Stock':
+          df[col] = 0
+        else:
+          df[col] = 'N/A'
+    df.to_excel(EXCEL_FILE, index=False)
   return df
 
 
@@ -55,7 +73,6 @@ df_inventario = cargar_datos()
 # --- VENTANA CON 3 BOTONES PRINCIPALES HORIZONTALES ---
 col_b1, col_b2, col_b3 = st.columns(3)
 
-# Controlamos la vista activa mediante el session_state de Streamlit
 if 'vista_activa' not in st.session_state:
   st.session_state.vista_activa = 'inventario'
 
