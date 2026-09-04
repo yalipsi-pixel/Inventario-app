@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import pandas as pd
 import streamlit as st
@@ -35,28 +36,46 @@ def guardar_datos(df):
 
 st.set_page_config(
     page_title='Control de Inventario - Cumbre Ltda',
-    page_icon='📦',
+    page_icon='🌱',
     layout='wide',
 )
 
 if os.path.exists(LOGO_FILE):
-  st.image(LOGO_FILE, width=180)
+  st.image(LOGO_FILE, width=160)
 
 st.title('🌱 Servicios Agrícolas Cumbre Ltda — Panel de Terreno')
 st.markdown(
     'Sistema sincronizado en tiempo real con el software de escritorio a través'
     ' de `inventario_cumbre.xlsx`.'
 )
+st.markdown('---')
 
 df_inventario = cargar_datos()
 
-menu = ['Ver Inventario', 'Registrar Entrada', 'Registrar Salida / Uso']
-choice = st.sidebar.selectbox('Menú de Opciones', menu)
+# --- VENTANA CON 3 BOTONES PRINCIPALES HORIZONTALES ---
+col_b1, col_b2, col_b3 = st.columns(3)
 
-if choice == 'Ver Inventario':
+# Controlamos la vista activa mediante el session_state de Streamlit
+if 'vista_activa' not in st.session_state:
+  st.session_state.vista_activa = 'inventario'
+
+with col_b1:
+  if st.button('📦 Ver Inventario General', use_container_width=True):
+    st.session_state.vista_activa = 'inventario'
+with col_b2:
+  if st.button('📥 Registrar Entrada', use_container_width=True):
+    st.session_state.vista_activa = 'entrada'
+with col_b3:
+  if st.button('📤 Registrar Salida / Uso', use_container_width=True):
+    st.session_state.vista_activa = 'salida'
+
+st.markdown('---')
+
+# --- CONTENIDO SEGÚN EL BOTÓN SELECCIONADO ---
+
+if st.session_state.vista_activa == 'inventario':
   st.subheader('📊 Stock Actual en Bodegas')
-
-  busqueda = st.text_input('Buscar producto o SKU:')
+  busqueda = st.text_input('🔍 Buscar producto o SKU:')
   if busqueda:
     df_filtrado = df_inventario[
         df_inventario['Producto'].str.contains(busqueda, case=False, na=False)
@@ -67,7 +86,7 @@ if choice == 'Ver Inventario':
 
   st.dataframe(df_filtrado, use_container_width=True)
 
-elif choice == 'Registrar Entrada':
+elif st.session_state.vista_activa == 'entrada':
   st.subheader('📥 Registrar Entrada de Insumos')
   with st.form('form_entrada'):
     producto_sel = st.selectbox(
@@ -85,7 +104,7 @@ elif choice == 'Registrar Entrada':
           f' {producto_sel}.'
       )
 
-elif choice == 'Registrar Salida / Uso':
+elif st.session_state.vista_activa == 'salida':
   st.subheader('📤 Registrar Salida o Aplicación en Terreno')
   with st.form('form_salida'):
     producto_sel = st.selectbox(
