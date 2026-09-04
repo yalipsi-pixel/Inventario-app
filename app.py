@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="Servicios Agrícolas Cumbre Ltda", page_icon="🍇", layout="centered"
 )
 
-# --- ARCHIVO DE PERSISTENCIA (BASE DE DATOS COMPARTIDA) ---
+# --- ARCHIVO DE PERSISTENCIA (BASE DE DATOS LOCAL) ---
 DB_FILE = "inventario_cumbre.xlsx"
 
 def inicializar_bd():
@@ -23,15 +23,14 @@ def inicializar_bd():
         except Exception:
             pass
     
-    # Datos iniciales base si no existe el archivo
     inventario_inicial = pd.DataFrame(
         {
-            "Codigo_Barras": ["U1", "103690", "U2", "2905507", "800004005185"],
+            "Codigo_Barras": ["U000001", "103690", "U000002", "2905507", "800004005185"],
             "Factura_Guia": ["56599", "", "", "", ""],
             "Nombre_Producto": ["Urea", "Fascinate 150 sl", "Azufre", "Tebuconazol 430 sc", "Bloqueador"],
             "Tipo": ["Fertilizante", "Herbicida", "Fungicida", "Insecticida", "Insumos"],
             "Stock_Actual": [0.0, 0.0, 0.0, 0.0, 0.0],
-            "Unidad_Medida": ["Kg", "Lt", "Kg", "Lt", "Unidades"],
+            "Unidad_Medida": ["", "", "", "", ""],
             "Bodega": ["Huingan", "Huingan", "Huingan", "Huingan", "Huingan"],
             "Proveedor": ["Copeval", "M&Valdivieso", "Gmt", "Otro", "Copeval"],
         }
@@ -73,12 +72,12 @@ with col_m2:
 
 st.markdown("---")
 
-# --- MENÚ DE ACCIONES (CELULAR) ---
+# --- ACCIONES PRINCIPALES ---
 st.subheader("Menú Principal")
 
 accion = st.radio(
     "Seleccione una operación:",
-    ["📋 Ver Inventario General", "📥 Ingreso a bodega", "📤 Salida / uso"],
+    ["📋 Ver Inventario General", "📥 Ingreso a bodega", "📤 Salida / uso", "🛠️ Panel de Administración (Editar / Corregir Errores)"],
 )
 
 st.markdown("---")
@@ -105,16 +104,16 @@ def widget_codigo_barras(sufijo):
         st.info("📱 Alinea el código de barras frente a la cámara y toma una foto.")
         foto = st.camera_input("Capturar código con cámara", key=f"cam_input_{sufijo}")
         if foto is not None:
-            st.success("✅ ¡Foto capturada! Anota el código visualizado en la casilla superior.")
+            st.success("✅ ¡Foto capturada! Anota el código visualizado en la casilla de texto superior si es necesario.")
             if st.button("Cerrar cámara", key=f"cerrar_cam_{sufijo}"):
                 st.session_state[cam_key] = False
                 st.rerun()
 
     return codigo_ingresado
 
-# --- 1. INGRESO A BODEGA ---
+# --- VISTA 1: INGRESO A BODEGA ---
 if accion == "📥 Ingreso a bodega":
-    st.markdown("### 📥 Registrar entrada de productos")
+    st.markdown("### 📥 Registrar entrada")
     codigo_ingreso = widget_codigo_barras("ingreso")
     factura_guia = st.text_input("Factura o Guía de compra")
     
@@ -182,9 +181,9 @@ if accion == "📥 Ingreso a bodega":
         else:
             st.warning("Completa los campos obligatorios y una cantidad mayor a 0.")
 
-# --- 2. SALIDA / USO ---
+# --- VISTA 2: SALIDA / USO ---
 elif accion == "📤 Salida / uso":
-    st.markdown("### 📤 Registrar salida / aplicación")
+    st.markdown("### 📤 Registrar salida / uso")
     lista_productos_disponibles = ["-- Seleccionar desde inventario --"] + [
         f"{row['Nombre_Producto']} (SKU: {row['Codigo_Barras']} - Stock: {row['Stock_Actual']} {row['Unidad_Medida']})"
         for _, row in st.session_state.inventario.iterrows()
@@ -261,8 +260,8 @@ elif accion == "📤 Salida / uso":
         else:
             st.error("Completa los datos correctamente.")
 
-# --- 3. INVENTARIO GENERAL ---
-else:
+# --- VISTA 3: INVENTARIO GENERAL (PÚBLICO) ---
+elif accion == "📋 Ver Inventario General":
     tab1, tab2 = st.tabs(["📦 Stock Actual (Productos)", "📊 Registro de Movimientos"])
     with tab1:
         st.markdown("### Tabla de Stock en Bodega")
@@ -278,6 +277,28 @@ else:
     with tab2:
         st.markdown("### Historial de Movimientos / Aplicaciones")
         st.dataframe(st.session_state.movimientos, use_container_width=True)
+
+# --- VISTA 4: PANEL DE ADMINISTRACIÓN / CORRECCIÓN (PRIVADO CON CLAVE) ---
+else:
+    st.markdown("### 🛠️ Panel de Administración y Corrección de Errores")
+    clave_admin = st.text_input("Ingrese la clave de administrador para desbloquear la edición", type="password")
+    
+    if clave_admin == "cumbre2026":
+        st.success("🔓 Acceso de administración concedido.")
+        st.markdown("Aquí puedes editar directamente el inventario o corregir valores si hubo algún error de tipeo:")
+        
+        # Editor interactivo de datos
+        st.markdown("#### ✏️ Editar Tabla de Inventario Actual")
+        inventario_editado = st.data_editor(st.session_state.inventario, key="editor_inventario", num_rows="dynamic")
+        
+        if st.button("Guardar Cambios y Correcciones en la Base de Datos"):
+            st.session_state.inventario = inventario_editado
+            guardar_bd()
+            st.success("¡Los cambios y correcciones se han guardado exitosamente!")
+            st.rerun()
+            
+    elif clave_admin != "":
+        st.error("❌ Contraseña de administrador incorrecta.")
 
 # --- BOTÓN PARA DESCARGAR EL EXCEL GENERAL ---
 st.markdown("---")
