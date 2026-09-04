@@ -79,7 +79,7 @@ with tab1:
             categoria = st.selectbox("Categoría", ["Agroquímicos", "Fertilizantes", "Herramientas", "Semillas", "EPP (Seguridad)", "Otros"])
             
             # --- LISTA DE UNIDADES CORREGIDA (SIN "TENIENTE") ---
-            unidades_limpias = ["-- Seleccionar --", "Kg", "gr", "cc", "Litros", "Unidades", "Sacos", "Cajas", "Metros"]
+            unidades_limpias = ["-- Seleccionar --","Kg","gr","cc","Litros","Unidades"]
             unidad = st.selectbox("Unidad de Medida", unidades_limpias)
             
         with col2:
