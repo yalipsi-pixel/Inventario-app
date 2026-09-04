@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 import pandas as pd
 import streamlit as st
 
@@ -7,33 +8,31 @@ st.set_page_config(
     page_title="Servicios Agrícolas Cumbre Ltda", page_icon="🍇", layout="centered"
 )
 
-# --- CABECERA CON LOGO CORREGIDO ---
-try:
-    st.image("LOGO CUMBRE_2.jpg", use_container_width=True)
-except:
-    st.title("🍇 S.Agrícolas Cumbre Ltda")
+# --- ARCHIVO DE PERSISTENCIA (BASE DE DATOS LOCAL) ---
+DB_FILE = "inventario_cumbre.xlsx"
 
-st.markdown("Control inteligente de ingresos, salidas y stock en tiempo real.")
+# Función para cargar o inicializar datos desde el Excel permanente
+@st.cache_data
+def cargar_datos():
+    return pd.DataFrame()
 
-# --- INICIALIZAR DATOS DE PRUEBA ---
-if "inventario" not in st.session_state:
-    st.session_state.inventario = pd.DataFrame(
+def inicializar_bd():
+    if os.path.exists(DB_FILE):
+        try:
+            inventario = pd.read_excel(DB_FILE, sheet_name="Inventario_Actual")
+            movimientos = pd.read_excel(DB_FILE, sheet_name="Movimientos")
+            # Asegurar tipos de datos correctos si hay NaN
+            inventario["Factura_Guia"] = inventario["Factura_Guia"].fillna("").astype(str)
+            return inventario, movimientos
+        except Exception:
+            pass
+    
+    # Datos iniciales por defecto si no existe el archivo
+    inventario_inicial = pd.DataFrame(
         {
-            "Codigo_Barras": [
-                "U000001",
-                "103690",
-                "U000002",
-                "2905507",
-                "800004005185",
-            ],
+            "Codigo_Barras": ["U000001", "103690", "U000002", "2905507", "800004005185"],
             "Factura_Guia": ["56599", "", "", "", ""],
-            "Nombre_Producto": [
-                "Urea",
-                "Fascinate 150 sl",
-                "Azufre",
-                "Tebuconazol 430 sc",
-                "Bloqueador",
-            ],
+            "Nombre_Producto": ["Urea", "Fascinate 150 sl", "Azufre", "Tebuconazol 430 sc", "Bloqueador"],
             "Tipo": ["Fertilizante", "Herbicida", "Fungicida", "Insecticida", "Insumos"],
             "Stock_Actual": [0.0, 0.0, 0.0, 0.0, 0.0],
             "Unidad_Medida": ["", "", "", "", ""],
@@ -41,20 +40,29 @@ if "inventario" not in st.session_state:
             "Proveedor": ["Copeval", "M&Valdivieso", "Gmt", "Otro", "Copeval"],
         }
     )
-
-if "movimientos" not in st.session_state:
-    st.session_state.movimientos = pd.DataFrame(
-        columns=[
-            "Codigo_Barras",
-            "Fecha",
-            "Producto",
-            "Cantidad",
-            "Unidad_Medida",
-            "Campo",
-            "Cuartel",
-            "Usuario",
-        ]
+    movimientos_iniciales = pd.DataFrame(
+        columns=["Codigo_Barras", "Fecha", "Producto", "Cantidad", "Unidad_Medida", "Campo", "Cuartel", "Usuario"]
     )
+    return inventario_inicial, movimientos_iniciales
+
+def guardar_bd():
+    with pd.ExcelWriter(DB_FILE, engine="openpyxl") as writer:
+        st.session_state.inventario.to_excel(writer, index=False, sheet_name="Inventario_Actual")
+        st.session_state.movimientos.to_excel(writer, index=False, sheet_name="Movimientos")
+
+# Cargar en session_state al iniciar
+if "inventario" not in st.session_state or "movimientos" not in st.session_state:
+    inv, mov = inicializar_bd()
+    st.session_state.inventario = inv
+    st.session_state.movimientos = mov
+
+# --- CABECERA CON LOGO CORREGIDO ---
+try:
+    st.image("LOGO CUMBRE_2.jpg", use_container_width=True)
+except:
+    st.title("🍇 S.Agrícolas Cumbre Ltda")
+
+st.markdown("Control inteligente de ingresos, salidas y stock en tiempo real.")
 
 # Métricas superiores
 total_productos = len(st.session_state.inventario)
@@ -167,6 +175,7 @@ if accion == "📥 Ingreso a bodega":
                 idx = inv[inv["Codigo_Barras"] == codigo_ingreso].index[0]
                 st.session_state.inventario.at[idx, "Stock_Actual"] += cantidad_ingreso
                 st.session_state.inventario.at[idx, "Factura_Guia"] = factura_guia
+                guardar_bd() # Guardado automático
                 st.success(
                     f"¡Stock actualizado! Se sumaron {cantidad_ingreso} {unidad} a {nombre}."
                 )
@@ -186,6 +195,7 @@ if accion == "📥 Ingreso a bodega":
                 st.session_state.inventario = pd.concat(
                     [st.session_state.inventario, nuevo_prod], ignore_index=True
                 )
+                guardar_bd() # Guardado automático
                 st.success(f"¡Nuevo producto '{nombre}' registrado e ingresado con éxito!")
         else:
             st.warning("Debes completar al menos el código de barras, el nombre del producto y una cantidad mayor a 0.")
@@ -265,7 +275,7 @@ elif accion == "📤 Salida / uso":
                     nuevo_mov = pd.DataFrame(
                         {
                             "Codigo_Barras": [codigo_salida],
-                            "Fecha": [datetime.now().strftime("%m/%d/%Y")],
+                            "Fecha": [datetime.now().strftime("%m/%d/%Y %H:%M")],
                             "Producto": [nombre_producto_salida],
                             "Cantidad": [f"{cantidad_retirada} {unidad_medida}"],
                             "Unidad_Medida": [unidad_medida],
@@ -277,7 +287,8 @@ elif accion == "📤 Salida / uso":
                     st.session_state.movimientos = pd.concat(
                         [st.session_state.movimientos, nuevo_mov], ignore_index=True
                     )
-                    st.success("¡Salida registrada con éxito! Stock actualizado en tiempo real.")
+                    guardar_bd() # Guardado automático
+                    st.success("¡Salida registrada con éxito! Stock actualizado y respaldado.")
                 else:
                     st.error(f"Stock insuficiente. Solo hay {stock_actual} disponibles.")
             else:
@@ -303,21 +314,24 @@ else:
     with tab2:
         st.markdown("### Historial de Movimientos / Aplicaciones")
         st.dataframe(st.session_state.movimientos, use_container_width=True)
-        # --- BOTÓN PARA DESCARGAR EL INVENTARIO EN EXCEL ---
+
+# --- BOTÓN PARA DESCARGAR EL EXCEL GENERAL ---
 st.markdown("---")
 st.subheader("📊 Exportar Datos")
 
-# Convertir el DataFrame de inventario a Excel en memoria
-import io
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine='openpyxl') as writer:
-    st.session_state.inventario.to_excel(writer, index=False, sheet_name='Inventario_Actual')
-    st.session_state.movimientos.to_excel(writer, index=False, sheet_name='Movimientos')
-excel_data = output.getvalue()
+if os.path.exists(DB_FILE):
+    with open(DB_FILE, "rb") as f:
+        excel_bytes = f.read()
+else:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.inventario.to_excel(writer, index=False, sheet_name='Inventario_Actual')
+        st.session_state.movimientos.to_excel(writer, index=False, sheet_name='Movimientos')
+    excel_bytes = output.getvalue()
 
 st.download_button(
     label="📥 Descargar Base de Datos Completa (Excel)",
-    data=excel_data,
+    data=excel_bytes,
     file_name="Inventario_Servicios_Cumbre.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
