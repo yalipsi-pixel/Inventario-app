@@ -13,11 +13,11 @@ st.set_page_config(
 )
 
 # RESTAURACIÓN DEL LOGO
-ruta_logo = "LOGO CUMBRE_2.jpg"
+ruta_logo = "LOGO CUMBRE_2.jpg" 
 if os.path.exists(ruta_logo):
     st.image(ruta_logo, width=250)
 else:
-    st.warning("⚠️ No se encontró el archivo 'logo.png'. Por favor, colócalo en la misma carpeta que este programa para visualizarlo.")
+    st.warning(f"⚠️ No se encontró el archivo '{ruta_logo}'. Por favor, colócalo en la misma carpeta que este programa para visualizarlo.")
 
 st.title("📦 Sistema de Inventario Web")
 st.subheader("Servicios Agrícolas Cumbre Ltda.")
@@ -25,25 +25,18 @@ st.subheader("Servicios Agrícolas Cumbre Ltda.")
 # ==========================================
 # CONFIGURACIÓN DE RUTA HACIA EL ESCRITORIO
 # ==========================================
-# Detectar el directorio del usuario (Ej: C:\Users\TuNombre)
 home_dir = os.path.expanduser("~")
-
-# Manejar la diferencia entre Windows en Inglés (Desktop) y Español (Escritorio)
 ruta_escritorio = os.path.join(home_dir, "Desktop")
 if not os.path.exists(ruta_escritorio):
     ruta_escritorio = os.path.join(home_dir, "Escritorio")
 
-# Definir la carpeta y el archivo exacto solicitado
 CARPETA_BBDD = os.path.join(ruta_escritorio, "inventario cumbre")
 EXCEL_FILE = os.path.join(CARPETA_BBDD, "Inventario_Servicios_Cumbre.xlsx")
 
 def inicializar_entorno():
-    """Crea la carpeta en el escritorio y el archivo Excel si no existen."""
-    # 1. Crear carpeta si no existe
     if not os.path.exists(CARPETA_BBDD):
         os.makedirs(CARPETA_BBDD)
         
-    # 2. Crear Excel con las hojas necesarias si no existe
     if not os.path.exists(EXCEL_FILE):
         df_inv = pd.DataFrame(columns=[
             "Código", "Producto", "Categoría", "Stock_Actual", "Unidad_Medida", "Ultima_Actualizacion"
@@ -56,19 +49,16 @@ def inicializar_entorno():
             df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
 
 def cargar_datos():
-    """Carga los datos asegurando que el entorno esté creado."""
     inicializar_entorno()
     df_inv = pd.read_excel(EXCEL_FILE, sheet_name="Inventario_Actual")
     df_mov = pd.read_excel(EXCEL_FILE, sheet_name="Movimientos")
     return df_inv, df_mov
 
 def guardar_datos(df_inv, df_mov):
-    """Guarda los datos en la ruta del Escritorio."""
     with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
         df_inv.to_excel(writer, sheet_name="Inventario_Actual", index=False)
         df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
 
-# Cargar datos al iniciar la app
 df_inv, df_mov = cargar_datos()
 
 # ==========================================
@@ -88,8 +78,8 @@ with tab1:
             producto = st.text_input("Nombre del Producto")
             categoria = st.selectbox("Categoría", ["Agroquímicos", "Fertilizantes", "Herramientas", "Semillas", "EPP (Seguridad)", "Otros"])
             
-            # UNIDADES DE MEDIDA CORRECTAS
-            unidades_limpias = ["Litros", "Kilos", "Unidades", "Sacos", "Cajas", "Bidones", "Gramos", "Metros"]
+            # --- LISTA DE UNIDADES CORREGIDA (SIN "TENIENTE") ---
+            unidades_limpias = ["-- Seleccionar --", "Kg", "gr", "cc", "Litros", "Unidades", "Sacos", "Cajas", "Metros"]
             unidad = st.selectbox("Unidad de Medida", unidades_limpias)
             
         with col2:
@@ -100,8 +90,10 @@ with tab1:
         submit_btn = st.form_submit_button("Guardar Movimiento")
         
         if submit_btn:
-            if not producto.strip():
-                st.error("El nombre del producto no puede estar vacío.")
+            if unidad == "-- Seleccionar --":
+                st.error("⚠️ Por favor, selecciona una Unidad de Medida válida.")
+            elif not producto.strip():
+                st.error("⚠️ El nombre del producto no puede estar vacío.")
             else:
                 fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 tipo_limpio = "Entrada" if "Entrada" in tipo_mov else "Salida"
@@ -142,7 +134,6 @@ with tab1:
                     }])
                     df_inv = pd.concat([df_inv, nuevo_inv], ignore_index=True)
                 
-                # Guardar cambios
                 guardar_datos(df_inv, df_mov)
                 st.success(f"✅ Movimiento guardado exitosamente. Se actualizó el stock de {prod_upper}.")
                 st.rerun()
