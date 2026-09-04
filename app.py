@@ -1,322 +1,167 @@
-from datetime import datetime
-import io
-import os
-import re
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import os
+from datetime import datetime
 
-# Configuración de la página
+# ==========================================
+# CONFIGURACIÓN DE LA PÁGINA Y LOGO
+# ==========================================
 st.set_page_config(
-    page_title="Servicios Agrícolas Cumbre Ltda", page_icon="🍇", layout="centered"
+    page_title="Inventario - Servicios Agrícolas Cumbre", 
+    page_icon="📦", 
+    layout="wide"
 )
 
-# --- ARCHIVO DE PERSISTENCIA (BASE DE DATOS LOCAL) ---
-DB_FILE = "inventario_cumbre.xlsx"
+# RESTAURACIÓN DEL LOGO
+ruta_logo = "LOGO CUMBRE_2.jpg" 
+if os.path.exists(ruta_logo):
+    st.image(ruta_logo, width=250)
+else:
+    st.warning("⚠️ No se encontró el archivo 'logo.png'. Por favor, colócalo en la misma carpeta que este programa para visualizarlo.")
 
-def inicializar_bd():
-    if os.path.exists(DB_FILE):
-        try:
-            inventario = pd.read_excel(DB_FILE, sheet_name="Inventario_Actual")
-            movimientos = pd.read_excel(DB_FILE, sheet_name="Movimientos")
-            inventario["Factura_Guia"] = inventario["Factura_Guia"].fillna("").astype(str)
-            return inventario, movimientos
-        except Exception:
-            pass
-    
-    inventario_inicial = pd.DataFrame(
-        {
-            "Codigo_Barras": ["U000001", "103690", "U000002", "2905507", "800004005185"],
-            "Factura_Guia": ["56599", "", "", "", ""],
-            "Nombre_Producto": ["Urea", "Fascinate 150 sl", "Azufre", "Tebuconazol 430 sc", "Bloqueador"],
-            "Tipo": ["Fertilizante", "Herbicida", "Fungicida", "Insecticida", "Insumos"],
-            "Stock_Actual": [0.0, 0.0, 0.0, 0.0, 0.0],
-            "Unidad_Medida": ["", "", "", "", ""],
-            "Bodega": ["Huingan", "Huingan", "Huingan", "Huingan", "Huingan"],
-            "Proveedor": ["Copeval", "M&Valdivieso", "Gmt", "Otro", "Copeval"],
-        }
-    )
-    movimientos_iniciales = pd.DataFrame(
-        columns=["Codigo_Barras", "Fecha", "Producto", "Cantidad", "Unidad_Medida", "Campo", "Cuartel", "Usuario"]
-    )
-    return inventario_inicial, movimientos_iniciales
+st.title("📦 Sistema de Inventario Web")
+st.subheader("Servicios Agrícolas Cumbre Ltda.")
 
-def guardar_bd():
-    with pd.ExcelWriter(DB_FILE, engine="openpyxl") as writer:
-        st.session_state.inventario.to_excel(writer, index=False, sheet_name="Inventario_Actual")
-        st.session_state.movimientos.to_excel(writer, index=False, sheet_name="Movimientos")
+# ==========================================
+# CONFIGURACIÓN DE RUTA HACIA EL ESCRITORIO
+# ==========================================
+# Detectar el directorio del usuario (Ej: C:\Users\TuNombre)
+home_dir = os.path.expanduser("~")
 
-if "inventario" not in st.session_state or "movimientos" not in st.session_state:
-    inv, mov = inicializar_bd()
-    st.session_state.inventario = inv
-    st.session_state.movimientos = mov
+# Manejar la diferencia entre Windows en Inglés (Desktop) y Español (Escritorio)
+ruta_escritorio = os.path.join(home_dir, "Desktop")
+if not os.path.exists(ruta_escritorio):
+    ruta_escritorio = os.path.join(home_dir, "Escritorio")
 
-# --- CABECERA ---
-try:
-    st.image("LOGO CUMBRE_2.jpg", use_container_width=True)
-except:
-    st.title("🍇 S.Agrícolas Cumbre Ltda")
+# Definir la carpeta y el archivo exacto solicitado
+CARPETA_BBDD = os.path.join(ruta_escritorio, "inventario cumbre")
+EXCEL_FILE = os.path.join(CARPETA_BBDD, "Inventario_Servicios_Cumbre.xlsx")
 
-st.markdown("Control inteligente de ingresos, salidas y stock en tiempo real.")
-
-# Métricas superiores
-total_productos = len(st.session_state.inventario)
-sin_stock = len(
-    st.session_state.inventario[st.session_state.inventario["Stock_Actual"] == 0]
-)
-
-col_m1, col_m2 = st.columns(2)
-with col_m1:
-    st.metric("📦 Productos", total_productos)
-with col_m2:
-    st.metric("⚠️ Sin stock", sin_stock)
-
-st.markdown("---")
-
-# --- ACCIONES PRINCIPALES ---
-st.subheader("Menú Principal")
-
-accion = st.radio(
-    "Seleccione una operación:",
-    ["📋 Ver Inventario General", "📥 Ingreso a bodega", "📤 Salida / uso", "🛠️ Panel de Administración (Editar / Corregir Errores)"],
-)
-
-st.markdown("---")
-
-def widget_codigo_barras(sufijo):
-    cam_key = f"activar_cam_{sufijo}"
-    if cam_key not in st.session_state:
-        st.session_state[cam_key] = False
-
-    codigo_input_key = f"input_codigo_{sufijo}"
-    
-    col_input, col_btn = st.columns([3, 1])
-    
-    with col_input:
-        codigo_ingresado = st.text_input("Código de barras / SKU", key=codigo_input_key)
+def inicializar_entorno():
+    """Crea la carpeta en el escritorio y el archivo Excel si no existen."""
+    # 1. Crear carpeta si no existe
+    if not os.path.exists(CARPETA_BBDD):
+        os.makedirs(CARPETA_BBDD)
         
-    with col_btn:
-        st.write("") 
-        st.write("")
-        if st.button("📸 Cámara", key=f"btn_cam_{sufijo}", help="Usar cámara del celular"):
-            st.session_state[cam_key] = not st.session_state[cam_key]
+    # 2. Crear Excel con las hojas necesarias si no existe
+    if not os.path.exists(EXCEL_FILE):
+        df_inv = pd.DataFrame(columns=[
+            "Código", "Producto", "Categoría", "Stock_Actual", "Unidad_Medida", "Ultima_Actualizacion"
+        ])
+        df_mov = pd.DataFrame(columns=[
+            "Fecha", "Tipo_Movimiento", "Producto", "Cantidad", "Unidad_Medida", "Factura_Guia", "Observaciones"
+        ])
+        with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
+            df_inv.to_excel(writer, sheet_name="Inventario_Actual", index=False)
+            df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
 
-    if st.session_state[cam_key]:
-        st.info("📱 Alinea el código de barras frente a la cámara y toma una foto.")
-        foto = st.camera_input("Capturar código con cámara", key=f"cam_input_{sufijo}")
-        if foto is not None:
-            st.success("✅ ¡Foto capturada! Anota el código visualizado en la casilla de texto superior si es necesario.")
-            if st.button("Cerrar cámara", key=f"cerrar_cam_{sufijo}"):
-                st.session_state[cam_key] = False
+def cargar_datos():
+    """Carga los datos asegurando que el entorno esté creado."""
+    inicializar_entorno()
+    df_inv = pd.read_excel(EXCEL_FILE, sheet_name="Inventario_Actual")
+    df_mov = pd.read_excel(EXCEL_FILE, sheet_name="Movimientos")
+    return df_inv, df_mov
+
+def guardar_datos(df_inv, df_mov):
+    """Guarda los datos en la ruta del Escritorio."""
+    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
+        df_inv.to_excel(writer, sheet_name="Inventario_Actual", index=False)
+        df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
+
+# Cargar datos al iniciar la app
+df_inv, df_mov = cargar_datos()
+
+# ==========================================
+# MENÚ DE NAVEGACIÓN (PESTAÑAS)
+# ==========================================
+tab1, tab2, tab3 = st.tabs(["➕ Registrar Movimiento", "📦 Inventario Actual", "📊 Historial de Movimientos"])
+
+# --- PESTAÑA 1: REGISTRAR MOVIMIENTO ---
+with tab1:
+    st.markdown("### Ingresar nueva Entrada o Salida")
+    
+    with st.form("form_movimiento"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            tipo_mov = st.radio("Tipo de Movimiento:", ["Entrada 📥", "Salida 📤"])
+            producto = st.text_input("Nombre del Producto")
+            categoria = st.selectbox("Categoría", ["Agroquímicos", "Fertilizantes", "Herramientas", "Semillas", "EPP (Seguridad)", "Otros"])
+            
+            # UNIDADES DE MEDIDA CORRECTAS
+            unidades_limpias = ["Litros", "Kilos", "Unidades", "Sacos", "Cajas", "Bidones", "Gramos", "Metros"]
+            unidad = st.selectbox("Unidad de Medida", unidades_limpias)
+            
+        with col2:
+            cantidad = st.number_input("Cantidad", min_value=0.01, step=1.0)
+            factura_guia = st.text_input("N° Factura o Guía (Opcional)")
+            observaciones = st.text_area("Observaciones (Opcional)")
+            
+        submit_btn = st.form_submit_button("Guardar Movimiento")
+        
+        if submit_btn:
+            if not producto.strip():
+                st.error("El nombre del producto no puede estar vacío.")
+            else:
+                fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                tipo_limpio = "Entrada" if "Entrada" in tipo_mov else "Salida"
+                
+                # 1. Guardar en Historial
+                nuevo_mov = pd.DataFrame([{
+                    "Fecha": fecha_actual,
+                    "Tipo_Movimiento": tipo_limpio,
+                    "Producto": producto.strip().upper(),
+                    "Cantidad": cantidad,
+                    "Unidad_Medida": unidad,
+                    "Factura_Guia": factura_guia,
+                    "Observaciones": observaciones
+                }])
+                df_mov = pd.concat([df_mov, nuevo_mov], ignore_index=True)
+                
+                # 2. Actualizar Inventario
+                prod_upper = producto.strip().upper()
+                if prod_upper in df_inv["Producto"].values:
+                    idx = df_inv.index[df_inv["Producto"] == prod_upper].tolist()[0]
+                    stock_previo = float(df_inv.at[idx, "Stock_Actual"])
+                    
+                    if tipo_limpio == "Entrada":
+                        df_inv.at[idx, "Stock_Actual"] = stock_previo + cantidad
+                    else:
+                        df_inv.at[idx, "Stock_Actual"] = stock_previo - cantidad
+                        
+                    df_inv.at[idx, "Ultima_Actualizacion"] = fecha_actual
+                else:
+                    stock_inicial = cantidad if tipo_limpio == "Entrada" else -cantidad
+                    nuevo_inv = pd.DataFrame([{
+                        "Código": f"PROD-{len(df_inv)+1:04d}",
+                        "Producto": prod_upper,
+                        "Categoría": categoria,
+                        "Stock_Actual": stock_inicial,
+                        "Unidad_Medida": unidad,
+                        "Ultima_Actualizacion": fecha_actual
+                    }])
+                    df_inv = pd.concat([df_inv, nuevo_inv], ignore_index=True)
+                
+                # Guardar cambios
+                guardar_datos(df_inv, df_mov)
+                st.success(f"✅ Movimiento guardado exitosamente. Se actualizó el stock de {prod_upper}.")
                 st.rerun()
 
-    return codigo_ingresado
+# --- PESTAÑA 2: INVENTARIO ACTUAL ---
+with tab2:
+    st.markdown("### Stock en Bodega")
+    st.caption(f"📂 Conectado a: {EXCEL_FILE}")
+    if df_inv.empty:
+        st.info("El inventario está vacío. Registra un movimiento para comenzar.")
+    else:
+        df_inv_mostrar = df_inv.copy()
+        st.dataframe(df_inv_mostrar, use_container_width=True, hide_index=True)
 
-# --- VISTA 1: INGRESO A BODEGA ---
-if accion == "📥 Ingreso a bodega":
-    st.markdown("### 📥 Registrar entrada")
-    codigo_ingreso = widget_codigo_barras("ingreso")
-    factura_guia = st.text_input("Factura o Guía de compra")
-    
-    prod_sugerido = ""
-    tipo_sug = "-- Seleccionar --"
-    unidad_sug = "-- Seleccionar --"
-    
-    if codigo_ingreso:
-        match = st.session_state.inventario[
-            st.session_state.inventario["Codigo_Barras"] == codigo_ingreso
-        ]
-        if not match.empty:
-            prod_sugerido = match.iloc[0]["Nombre_Producto"]
-            tipo_sug = match.iloc[0]["Tipo"]
-            unidad_sug = match.iloc[0]["Unidad_Medida"]
-
-    nombre = st.text_input("Nombre del producto", value=prod_sugerido)
-    cantidad_ingreso = st.number_input("Cantidad a ingresar", min_value=0.0, value=None, format="%.2f")
-    
-    tipos_disponibles = ["-- Seleccionar --", "Fertilizante", "Herbicida", "Fungicida", "Insecticida", "Insumos", "Otros"]
-    try:
-        idx_tipo = tipos_disponibles.index(tipo_sug)
-    except ValueError:
-        idx_tipo = 0
-
-    tipo = st.selectbox("Tipo", tipos_disponibles, index=idx_tipo)
-    
-    unidades_disponibles = ["-- Seleccionar --", "Kg", "gr", "Lt", "cc", "Unidades"]
-    try:
-        idx_unidad = unidades_disponibles.index(unidad_sug)
-    except ValueError:
-        idx_unidad = 0
-
-    unidad = st.selectbox("Unidad de medida", unidades_disponibles, index=idx_unidad)
-    bodega = st.selectbox("Bodega", ["-- Seleccionar --", "Huingan", "Bucalemu", "Rinconada", "San Felipe"], index=0)
-    proveedor = st.selectbox("Proveedor", ["-- Seleccionar --", "Copeval", "Gmt", "M&Valdivieso", "Otro"], index=0)
-
-    if st.button("Guardar Ingreso"):
-        if codigo_ingreso and nombre and cantidad_ingreso is not None and cantidad_ingreso > 0:
-            inv = st.session_state.inventario
-            if codigo_ingreso in inv["Codigo_Barras"].values:
-                idx = inv[inv["Codigo_Barras"] == codigo_ingreso].index[0]
-                st.session_state.inventario.at[idx, "Stock_Actual"] += cantidad_ingreso
-                st.session_state.inventario.at[idx, "Factura_Guia"] = factura_guia
-                guardar_bd()
-                st.success(f"¡Stock actualizado! Se sumaron {cantidad_ingreso} {unidad} a {nombre}.")
-            else:
-                nuevo_prod = pd.DataFrame(
-                    {
-                        "Codigo_Barras": [codigo_ingreso],
-                        "Factura_Guia": [factura_guia],
-                        "Nombre_Producto": [nombre],
-                        "Tipo": [tipo],
-                        "Stock_Actual": [cantidad_ingreso],
-                        "Unidad_Medida": [unidad],
-                        "Bodega": [bodega],
-                        "Proveedor": [proveedor],
-                    }
-                )
-                st.session_state.inventario = pd.concat(
-                    [st.session_state.inventario, nuevo_prod], ignore_index=True
-                )
-                guardar_bd()
-                st.success(f"¡Nuevo producto '{nombre}' registrado e ingresado con éxito!")
-        else:
-            st.warning("Completa los campos obligatorios y una cantidad mayor a 0.")
-
-# --- VISTA 2: SALIDA / USO ---
-elif accion == "📤 Salida / uso":
-    st.markdown("### 📤 Registrar salida / uso")
-    lista_productos_disponibles = ["-- Seleccionar desde inventario --"] + [
-        f"{row['Nombre_Producto']} (SKU: {row['Codigo_Barras']} - Stock: {row['Stock_Actual']} {row['Unidad_Medida']})"
-        for _, row in st.session_state.inventario.iterrows()
-    ]
-    
-    sel_producto = st.selectbox("📦 Selección rápida de producto", lista_productos_disponibles)
-    codigo_sugerido_select = ""
-    if sel_producto != "-- Seleccionar desde inventario --":
-        match_sku = re.search(r"SKU: (.*?) -", sel_producto)
-        if match_sku:
-            codigo_sugerido_select = match_sku.group(1)
-
-    codigo_salida = widget_codigo_barras("salida")
-    if not codigo_salida and codigo_sugerido_select:
-        codigo_salida = codigo_sugerido_select
-
-    prod_nombre_encontrado = ""
-    unidad_medida_sugerida = "-- Seleccionar --"
-
-    if codigo_salida:
-        match = st.session_state.inventario[
-            st.session_state.inventario["Codigo_Barras"] == codigo_salida
-        ]
-        if not match.empty:
-            prod_nombre_encontrado = match.iloc[0]["Nombre_Producto"]
-            unidad_medida_sugerida = match.iloc[0]["Unidad_Medida"]
-        else:
-            st.warning("⚠️ Código de barras no encontrado en el inventario.")
-
-    nombre_producto_salida = st.text_input("Nombre del producto", value=prod_nombre_encontrado)
-    cantidad_retirada = st.number_input("Cantidad que ocuparé", min_value=0.0, value=None, format="%.2f")
-
-    unidades_disponibles = ["-- Seleccionar --", "Kg", "gr", "Lt", "cc", "Unidades"]
-    try:
-        index_default = unidades_disponibles.index(unidad_medida_sugerida)
-    except ValueError:
-        index_default = 0
-
-    unidad_medida = st.selectbox("Unidad de medida", unidades_disponibles, index=index_default)
-    campo = st.selectbox("Campo", ["-- Seleccionar --", "El Huingan", "Bucalemu", "Rinconada", "San Felipe"], index=0)
-    cuartel = st.selectbox("Cuartel", ["-- Seleccionar --", "Cuartel 1 Timpson", "Cuartel 2", "Cuartel 3", "General / Bodega"], index=0)
-    usuario = st.selectbox("Usuario / Responsable", ["-- Seleccionar --", "Bruno Hernández", "Manuel Muñoz", "Bodeguero"], index=0)
-
-    if st.button("Guardar Salida"):
-        if codigo_salida and nombre_producto_salida and cantidad_retirada is not None and cantidad_retirada > 0:
-            inv = st.session_state.inventario
-            if codigo_salida in inv["Codigo_Barras"].values:
-                idx = inv[inv["Codigo_Barras"] == codigo_salida].index[0]
-                stock_actual = inv.at[idx, "Stock_Actual"]
-
-                if stock_actual >= cantidad_retirada:
-                    st.session_state.inventario.at[idx, "Stock_Actual"] = stock_actual - cantidad_retirada
-                    nuevo_mov = pd.DataFrame(
-                        {
-                            "Codigo_Barras": [codigo_salida],
-                            "Fecha": [datetime.now().strftime("%m/%d/%Y %H:%M")],
-                            "Producto": [nombre_producto_salida],
-                            "Cantidad": [f"{cantidad_retirada} {unidad_medida}"],
-                            "Unidad_Medida": [unidad_medida],
-                            "Campo": [campo],
-                            "Cuartel": [cuartel],
-                            "Usuario": [usuario],
-                        }
-                    )
-                    st.session_state.movimientos = pd.concat(
-                        [st.session_state.movimientos, nuevo_mov], ignore_index=True
-                    )
-                    guardar_bd()
-                    st.success("¡Salida registrada con éxito y respaldada en la nube!")
-                else:
-                    st.error(f"Stock insuficiente. Solo hay {stock_actual} disponibles.")
-            else:
-                st.error("El código ingresado no existe en el inventario actual.")
-        else:
-            st.error("Completa los datos correctamente.")
-
-# --- VISTA 3: INVENTARIO GENERAL (PÚBLICO) ---
-elif accion == "📋 Ver Inventario General":
-    tab1, tab2 = st.tabs(["📦 Stock Actual (Productos)", "📊 Registro de Movimientos"])
-    with tab1:
-        st.markdown("### Tabla de Stock en Bodega")
-        buscar_prod = st.text_input("🔍 Buscar por nombre o código:")
-        df_stock = st.session_state.inventario
-        if buscar_prod:
-            df_stock = df_stock[
-                df_stock["Nombre_Producto"].str.contains(buscar_prod, case=False, na=False)
-                | df_stock["Codigo_Barras"].str.contains(buscar_prod, case=False, na=False)
-            ]
-        st.dataframe(df_stock, use_container_width=True)
-
-    with tab2:
-        st.markdown("### Historial de Movimientos / Aplicaciones")
-        st.dataframe(st.session_state.movimientos, use_container_width=True)
-
-# --- VISTA 4: PANEL DE ADMINISTRACIÓN / CORRECCIÓN (PRIVADO CON CLAVE) ---
-else:
-    st.markdown("### 🛠️ Panel de Administración y Corrección de Errores")
-    clave_admin = st.text_input("Ingrese la clave de administrador para desbloquear la edición", type="password")
-    
-    if clave_admin == "cumbre2026":
-        st.success("🔓 Acceso de administración concedido.")
-        st.markdown("Aquí puedes editar directamente el inventario o corregir valores si hubo algún error de tipeo:")
-        
-        # Editor interactivo de datos
-        st.markdown("#### ✏️ Editar Tabla de Inventario Actual")
-        inventario_editado = st.data_editor(st.session_state.inventario, key="editor_inventario", num_rows="dynamic")
-        
-        if st.button("Guardar Cambios y Correcciones en la Base de Datos"):
-            st.session_state.inventario = inventario_editado
-            guardar_bd()
-            st.success("¡Los cambios y correcciones se han guardado exitosamente!")
-            st.rerun()
-            
-    elif clave_admin != "":
-        st.error("❌ Contraseña de administrador incorrecta.")
-
-# --- BOTÓN PARA DESCARGAR EL EXCEL GENERAL ---
-st.markdown("---")
-st.subheader("📊 Exportar Datos")
-
-if os.path.exists(DB_FILE):
-    with open(DB_FILE, "rb") as f:
-        excel_bytes = f.read()
-else:
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        st.session_state.inventario.to_excel(writer, index=False, sheet_name='Inventario_Actual')
-        st.session_state.movimientos.to_excel(writer, index=False, sheet_name='Movimientos')
-    excel_bytes = output.getvalue()
-
-st.download_button(
-    label="📥 Descargar Base de Datos Completa (Excel)",
-    data=excel_bytes,
-    file_name="Inventario_Servicios_Cumbre.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+# --- PESTAÑA 3: HISTORIAL DE MOVIMIENTOS ---
+with tab3:
+    st.markdown("### Registro Histórico")
+    if df_mov.empty:
+        st.info("No hay movimientos registrados.")
+    else:
+        df_mov_mostrar = df_mov.sort_values(by="Fecha", ascending=False)
+        st.dataframe(df_mov_mostrar, use_container_width=True, hide_index=True)
