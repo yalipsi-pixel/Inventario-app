@@ -1,230 +1,340 @@
-import streamlit as st
-import pandas as pd
 import os
+import shutil
 from datetime import datetime
+from pathlib import Path
 
-# ==========================================
-# CONFIGURACIÓN DE LA PÁGINA Y LOGO
-# ==========================================
+import pandas as pd
+import streamlit as st
+from openpyxl import load_workbook
+
 st.set_page_config(
-    page_title="Inventario - Servicios Agrícolas Cumbre",
+    page_title="Gestión de Inventario y Trazabilidad",
     page_icon="📦",
-    layout="wide"
+    layout="wide",
 )
 
-# RESTAURACIÓN DEL LOGO
-ruta_logo = "LOGO CUMBRE_2.jpg"
-if os.path.exists(ruta_logo):
-    st.image(ruta_logo, width=250)
-else:
-    st.warning(f"⚠️ No se encontró el archivo '{ruta_logo}'. Por favor, colócalo en la misma carpeta que este programa para visualizarlo.")
+st.title("📦 Gestión de Inventario y Trazabilidad")
+st.caption("Registro de ingresos, salidas y existencias del inventario.")
 
-st.title("📦 Sistema de Inventario Web")
-st.subheader("Servicios Agrícolas Cumbre Ltda.")
+# Puedes definir INVENTARIO_EXCEL como variable de entorno si guardas el archivo
+# en otra ubicación. Por defecto se busca en la carpeta de OneDrive indicada.
+RUTA_PREDETERMINADA = (
+    Path.home()
+    / "OneDrive - Personal"
+    / "CYO gestion traz e inventario"
+    / "Inventario_Servicios_Cumbre (version 1).xlsx"
+)
+EXCEL_FILE = Path(os.environ.get("INVENTARIO_EXCEL", str(RUTA_PREDETERMINADA))).expanduser()
 
-# ==========================================
-# CONFIGURACIÓN DE RUTA HACIA EL ESCRITORIO
-# ==========================================
-home_dir = os.path.expanduser("~")
-ruta_escritorio = os.path.join(home_dir, "Desktop")
-if not os.path.exists(ruta_escritorio):
-    ruta_escritorio = os.path.join(home_dir, "Escritorio")
+HOJA_INGRESOS = "Historial ingreso"
+HOJA_STOCK = "Stock"
+HOJA_SALIDAS = "Movimientos-Salida"
 
-CARPETA_BBDD = os.path.join(ruta_escritorio, "inventario cumbre")
-EXCEL_FILE = os.path.join(CARPETA_BBDD, "Inventario_Servicios_Cumbre.xlsx")
-
-
-def inicializar_entorno():
-    if not os.path.exists(CARPETA_BBDD):
-        os.makedirs(CARPETA_BBDD)
-
-    if not os.path.exists(EXCEL_FILE):
-        df_inv = pd.DataFrame(columns=[
-            "Código", "Producto", "Categoría", "Stock_Actual", "Unidad_Medida", "Ultima_Actualizacion"
-        ])
-        df_mov = pd.DataFrame(columns=[
-            "Fecha", "Tipo_Movimiento", "Producto", "Cantidad", "Unidad_Medida", "Factura_Guia", "Observaciones"
-        ])
-        with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
-            df_inv.to_excel(writer, sheet_name="Inventario_Actual", index=False)
-            df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
+ENCABEZADOS_INGRESO = [
+    "Codigo Barras", "Fecha y hora", "Factura / Guia", "Nombre Producto",
+    "Tipo", "Cantidad", "Unidad Medida", "Bodega", "Proveedor",
+]
+ENCABEZADOS_STOCK = [
+    "Codigo Barras", "Factura / Guia", "Nombre Producto", "Tipo",
+    "Stock Actual", "Unidad Medida", "Bodega", "Proveedor",
+]
+ENCABEZADOS_SALIDA = [
+    "Codigo Barras", "Fecha", "Nombre del Producto", "Cantidad",
+    "Unidad de Medida", "Campo", "Variedad", "Cuartel", "Responsable",
+]
 
 
-def cargar_datos():
-    inicializar_entorno()
-    df_inv = pd.read_excel(EXCEL_FILE, sheet_name="Inventario_Actual")
-    df_mov = pd.read_excel(EXCEL_FILE, sheet_name="Movimientos")
-    return df_inv, df_mov
+def normalizar(texto):
+    return " ".join(str(texto or "").strip().casefold().split())
 
 
-def guardar_datos(df_inv, df_mov):
-    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
-        df_inv.to_excel(writer, sheet_name="Inventario_Actual", index=False)
-        df_mov.to_excel(writer, sheet_name="Movimientos", index=False)
+def obtener_encabezados(hoja):
+    return {normalizar(celda.value): indice for indice, celda in enumerate(hoja[1], start=1) if celda.value is not None}
 
 
-def preparar_inventario_para_mostrar(df_inv, df_mov):
-    """Agrega al inventario las cantidades acumuladas de entradas y salidas."""
-    df_mostrar = df_inv.copy()
-    columnas_cantidades = ["Total_Entradas", "Total_Salidas"]
+def validar_hojas(libro):
+    necesarias = [HOJA_INGRESOS, HOJA_STOCK, HOJA_SALIDAS]
+    faltantes = [nombre for nombre in necesarias if nombre not in libro.sheetnames]
+    if faltantes:
+        raise ValueError(
+            "No se encontraron estas pestañas en el Excel: " + ", ".join(faltantes)
+            + ". Revisa que sus nombres coincidan exactamente."
+        )
 
-    if df_mostrar.empty:
-        for columna in columnas_cantidades:
-            df_mostrar[columna] = pd.Series(dtype="float64")
-        return df_mostrar
-
-    if df_mov.empty:
-        df_mostrar["Total_Entradas"] = 0
-        df_mostrar["Total_Salidas"] = 0
-        return df_mostrar
-
-    movimientos = df_mov.copy()
-    movimientos["Cantidad"] = pd.to_numeric(movimientos["Cantidad"], errors="coerce").fillna(0)
-    movimientos["Producto"] = movimientos["Producto"].astype(str).str.strip().str.upper()
-    movimientos["Tipo_Movimiento"] = movimientos["Tipo_Movimiento"].astype(str).str.strip().str.capitalize()
-
-    resumen = movimientos.pivot_table(
-        index="Producto",
-        columns="Tipo_Movimiento",
-        values="Cantidad",
-        aggfunc="sum",
-        fill_value=0
-    )
-    resumen = resumen.rename(columns={"Entrada": "Total_Entradas", "Salida": "Total_Salidas"})
-    for columna in columnas_cantidades:
-        if columna not in resumen.columns:
-            resumen[columna] = 0
-
-    df_mostrar["Producto"] = df_mostrar["Producto"].astype(str).str.strip().str.upper()
-    df_mostrar = df_mostrar.merge(
-        resumen[columnas_cantidades],
-        left_on="Producto",
-        right_index=True,
-        how="left"
-    )
-    df_mostrar[columnas_cantidades] = df_mostrar[columnas_cantidades].fillna(0)
-    return df_mostrar
+    requeridas = {
+        HOJA_INGRESOS: ENCABEZADOS_INGRESO,
+        HOJA_STOCK: ENCABEZADOS_STOCK,
+        HOJA_SALIDAS: ENCABEZADOS_SALIDA,
+    }
+    for nombre, esperadas in requeridas.items():
+        encabezados = obtener_encabezados(libro[nombre])
+        faltantes = [col for col in esperadas if normalizar(col) not in encabezados]
+        if faltantes:
+            raise ValueError(
+                f"En la pestaña '{nombre}' faltan columnas: {', '.join(faltantes)}. "
+                "No se modificó el archivo."
+            )
 
 
-df_inv, df_mov = cargar_datos()
+def abrir_libro():
+    if not EXCEL_FILE.is_file():
+        raise FileNotFoundError(
+            f"No se encontró el Excel en: {EXCEL_FILE}. "
+            "Confirma la ruta o define la variable de entorno INVENTARIO_EXCEL."
+        )
+    libro = load_workbook(EXCEL_FILE)
+    validar_hojas(libro)
+    return libro
 
-# ==========================================
-# MENÚ DE NAVEGACIÓN (PESTAÑAS)
-# ==========================================
-tab1, tab2, tab3 = st.tabs(["➕ Registrar Movimiento", "📦 Inventario Actual", "📊 Historial de Movimientos"])
 
-# --- PESTAÑA 1: REGISTRAR MOVIMIENTO ---
-with tab1:
-    st.markdown("### Ingresar nueva Entrada o Salida")
+def valor_fila(hoja, encabezados, fila, nombre_columna):
+    columna = encabezados.get(normalizar(nombre_columna))
+    return hoja.cell(fila, columna).value if columna else None
 
-    with st.form("form_movimiento"):
-        col1, col2 = st.columns(2)
 
-        with col1:
-            tipo_mov = st.radio("Tipo de Movimiento:", ["Entrada 📥", "Salida 📤"])
-            producto = st.text_input("Nombre del Producto")
-            categoria = st.selectbox("Categoría", ["Agroquímicos", "Fertilizantes", "Herramientas", "Semillas", "EPP (Seguridad)", "Otros"])
+def filas_con_datos(hoja, columna_clave=1):
+    return [
+        fila for fila in range(2, hoja.max_row + 1)
+        if hoja.cell(fila, columna_clave).value not in (None, "")
+    ]
 
-            unidades_limpias = ["-- Seleccionar --", "Kg", "gr", "cc", "Litros", "Unidades"]
-            unidad = st.selectbox("Unidad de Medida", unidades_limpias)
 
-        with col2:
-            cantidad = st.number_input("Cantidad", min_value=0.01, step=1.0)
-            factura_guia = st.text_input("N° Factura o Guía (Opcional)")
-            observaciones = st.text_area("Observaciones (Opcional)")
+def anexar_registro(hoja, encabezados, columnas, registro):
+    filas = filas_con_datos(hoja)
+    fila_nueva = (max(filas) if filas else 1) + 1
+    for nombre in columnas:
+        hoja.cell(fila_nueva, encabezados[normalizar(nombre)], registro.get(nombre))
+    # Amplía el rango de las tablas de Excel para incluir la fila añadida.
+    for tabla in hoja.tables.values():
+        min_col, min_fila, max_col, max_fila = __import__("openpyxl").utils.range_boundaries(tabla.ref)
+        if min_fila <= 1 <= max_fila and fila_nueva > max_fila:
+            tabla.ref = f"{__import__('openpyxl').utils.get_column_letter(min_col)}{min_fila}:{__import__('openpyxl').utils.get_column_letter(max_col)}{fila_nueva}"
+    return fila_nueva
 
-        submit_btn = st.form_submit_button("Guardar Movimiento")
 
-        if submit_btn:
-            if unidad == "-- Seleccionar --":
-                st.error("⚠️ Por favor, selecciona una Unidad de Medida válida.")
-            elif not producto.strip():
-                st.error("⚠️ El nombre del producto no puede estar vacío.")
-            else:
-                fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                tipo_limpio = "Entrada" if "Entrada" in tipo_mov else "Salida"
-                prod_upper = producto.strip().upper()
+def guardar_libro(libro):
+    # Conserva una copia anterior del libro antes de guardar cambios.
+    respaldo = EXCEL_FILE.with_name(f"{EXCEL_FILE.stem}.respaldo{EXCEL_FILE.suffix}")
+    if not respaldo.exists():
+        shutil.copy2(EXCEL_FILE, respaldo)
+    libro.save(EXCEL_FILE)
 
-                producto_existente = df_inv[df_inv["Producto"].astype(str).str.strip().str.upper() == prod_upper]
-                if not producto_existente.empty:
-                    idx = producto_existente.index[0]
-                    unidad_existente = str(df_inv.at[idx, "Unidad_Medida"])
-                    stock_previo = float(pd.to_numeric(df_inv.at[idx, "Stock_Actual"], errors="coerce") or 0)
 
-                    if unidad_existente != unidad:
-                        st.error(f"⚠️ Este producto está registrado en {unidad_existente}. Usa la misma unidad de medida.")
-                    elif tipo_limpio == "Salida" and cantidad > stock_previo:
-                        st.error(f"⚠️ Stock insuficiente. Disponible: {stock_previo:g} {unidad}.")
-                    else:
-                        nuevo_mov = pd.DataFrame([{
-                            "Fecha": fecha_actual,
-                            "Tipo_Movimiento": tipo_limpio,
-                            "Producto": prod_upper,
-                            "Cantidad": cantidad,
-                            "Unidad_Medida": unidad,
-                            "Factura_Guia": factura_guia,
-                            "Observaciones": observaciones
-                        }])
-                        df_mov = pd.concat([df_mov, nuevo_mov], ignore_index=True)
-                        cambio_stock = cantidad if tipo_limpio == "Entrada" else -cantidad
-                        df_inv.at[idx, "Stock_Actual"] = stock_previo + cambio_stock
-                        df_inv.at[idx, "Ultima_Actualizacion"] = fecha_actual
-                        guardar_datos(df_inv, df_mov)
-                        st.success(f"✅ {tipo_limpio} de {cantidad:g} {unidad} registrada. Stock actual de {prod_upper}: {stock_previo + cambio_stock:g} {unidad}.")
-                        st.rerun()
-                else:
-                    if tipo_limpio == "Salida":
-                        st.error("⚠️ No se puede registrar una salida: el producto aún no existe en el inventario.")
-                    else:
-                        nuevo_mov = pd.DataFrame([{
-                            "Fecha": fecha_actual,
-                            "Tipo_Movimiento": tipo_limpio,
-                            "Producto": prod_upper,
-                            "Cantidad": cantidad,
-                            "Unidad_Medida": unidad,
-                            "Factura_Guia": factura_guia,
-                            "Observaciones": observaciones
-                        }])
-                        nuevo_inv = pd.DataFrame([{
-                            "Código": f"PROD-{len(df_inv)+1:04d}",
-                            "Producto": prod_upper,
-                            "Categoría": categoria,
-                            "Stock_Actual": cantidad,
-                            "Unidad_Medida": unidad,
-                            "Ultima_Actualizacion": fecha_actual
-                        }])
-                        df_mov = pd.concat([df_mov, nuevo_mov], ignore_index=True)
-                        df_inv = pd.concat([df_inv, nuevo_inv], ignore_index=True)
-                        guardar_datos(df_inv, df_mov)
-                        st.success(f"✅ Entrada de {cantidad:g} {unidad} registrada. Stock actual de {prod_upper}: {cantidad:g} {unidad}.")
-                        st.rerun()
-
-# --- PESTAÑA 2: INVENTARIO ACTUAL ---
-with tab2:
-    st.markdown("### Stock en Bodega")
-    st.caption(f"📂 Conectado a: {EXCEL_FILE}")
-    if df_inv.empty:
-        st.info("El inventario está vacío. Registra un movimiento para comenzar.")
-    else:
-        df_inv_mostrar = preparar_inventario_para_mostrar(df_inv, df_mov)
-        df_inv_mostrar = df_inv_mostrar.rename(columns={
-            "Stock_Actual": "Stock Actual",
-            "Unidad_Medida": "Unidad",
-            "Total_Entradas": "Total Ingresado",
-            "Total_Salidas": "Total Salido",
-            "Ultima_Actualizacion": "Última Actualización"
+def leer_registros(hoja, columnas):
+    encabezados = obtener_encabezados(hoja)
+    registros = []
+    for fila in filas_con_datos(hoja):
+        registros.append({
+            nombre: valor_fila(hoja, encabezados, fila, nombre)
+            for nombre in columnas
         })
-        columnas = [
-            "Código", "Producto", "Categoría", "Total Ingresado", "Total Salido",
-            "Stock Actual", "Unidad", "Última Actualización"
-        ]
-        st.dataframe(df_inv_mostrar[columnas], use_container_width=True, hide_index=True)
+    return registros
 
-# --- PESTAÑA 3: HISTORIAL DE MOVIMIENTOS ---
-with tab3:
-    st.markdown("### Registro Histórico")
-    if df_mov.empty:
-        st.info("No hay movimientos registrados.")
+
+def cargar_stock():
+    libro = abrir_libro()
+    hoja = libro[HOJA_STOCK]
+    registros = leer_registros(hoja, ENCABEZADOS_STOCK)
+    return libro, hoja, registros
+
+
+def encontrar_producto(hoja, encabezados, codigo, nombre):
+    codigo_busqueda = normalizar(codigo)
+    nombre_busqueda = normalizar(nombre)
+    for fila in filas_con_datos(hoja):
+        codigo_fila = normalizar(valor_fila(hoja, encabezados, fila, "Codigo Barras"))
+        nombre_fila = normalizar(valor_fila(hoja, encabezados, fila, "Nombre Producto"))
+        if codigo_busqueda and codigo_fila == codigo_busqueda:
+            return fila
+        if not codigo_busqueda and nombre_busqueda and nombre_fila == nombre_busqueda:
+            return fila
+    return None
+
+
+def mostrar_error_excel(error):
+    st.error(f"No se pudo abrir o validar el archivo Excel: {error}")
+    st.info("El archivo no se crea ni se reemplaza automáticamente. Verifica la ruta y los encabezados antes de continuar.")
+
+
+if not EXCEL_FILE.is_file():
+    st.error(f"No se encontró el archivo Excel: `{EXCEL_FILE}`")
+    st.info("Revisa que OneDrive esté sincronizado. Si el archivo está en otra ubicación, define la variable de entorno `INVENTARIO_EXCEL` con la ruta completa.")
+    st.stop()
+
+try:
+    libro_actual = abrir_libro()
+except Exception as error:
+    mostrar_error_excel(error)
+    st.stop()
+
+st.caption(f"📂 Archivo conectado: {EXCEL_FILE}")
+st.caption("La pestaña 'Tab-Graf' se conserva y no se modifica desde la app.")
+
+tab_entrada, tab_salida, tab_stock, tab_historial = st.tabs(
+    ["➕ Entrada", "➖ Salida", "📦 Stock", "🧾 Historiales"]
+)
+
+with tab_entrada:
+    st.subheader("Registrar ingreso de productos")
+    with st.form("form_entrada", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            codigo = st.text_input("Código de barras")
+            factura = st.text_input("Factura / Guía")
+            nombre = st.text_input("Nombre del producto*")
+        with col2:
+            tipo = st.text_input("Tipo", placeholder="Ej.: Fertilizante, Herbicida")
+            cantidad = st.number_input("Cantidad ingresada*", min_value=0.01, step=1.0)
+            unidad = st.text_input("Unidad de medida*", placeholder="Kg, Lt, gr...")
+        with col3:
+            bodega = st.text_input("Bodega")
+            proveedor = st.text_input("Proveedor")
+        guardar_entrada = st.form_submit_button("Guardar entrada", type="primary")
+
+    if guardar_entrada:
+        if not nombre.strip() or not unidad.strip():
+            st.error("Completa el nombre del producto y la unidad de medida.")
+        else:
+            try:
+                libro = abrir_libro()
+                hoja_ingreso = libro[HOJA_INGRESOS]
+                hoja_stock = libro[HOJA_STOCK]
+                encabezados_ingreso = obtener_encabezados(hoja_ingreso)
+                encabezados_stock = obtener_encabezados(hoja_stock)
+                fecha = datetime.now()
+                registro_ingreso = {
+                    "Codigo Barras": codigo.strip(), "Fecha y hora": fecha,
+                    "Factura / Guia": factura.strip(), "Nombre Producto": nombre.strip(),
+                    "Tipo": tipo.strip(), "Cantidad": float(cantidad),
+                    "Unidad Medida": unidad.strip(), "Bodega": bodega.strip(),
+                    "Proveedor": proveedor.strip(),
+                }
+                anexar_registro(hoja_ingreso, encabezados_ingreso, ENCABEZADOS_INGRESO, registro_ingreso)
+
+                fila_stock = encontrar_producto(hoja_stock, encabezados_stock, codigo, nombre)
+                if fila_stock is None:
+                    registro_stock = {
+                        "Codigo Barras": codigo.strip(), "Factura / Guia": factura.strip(),
+                        "Nombre Producto": nombre.strip(), "Tipo": tipo.strip(),
+                        "Stock Actual": float(cantidad), "Unidad Medida": unidad.strip(),
+                        "Bodega": bodega.strip(), "Proveedor": proveedor.strip(),
+                    }
+                    anexar_registro(hoja_stock, encabezados_stock, ENCABEZADOS_STOCK, registro_stock)
+                    stock_nuevo = float(cantidad)
+                else:
+                    unidad_actual = valor_fila(hoja_stock, encabezados_stock, fila_stock, "Unidad Medida")
+                    if normalizar(unidad_actual) != normalizar(unidad):
+                        st.error(f"La unidad registrada para este producto es '{unidad_actual}'. No se guardó el movimiento para evitar mezclar unidades.")
+                        st.stop()
+                    stock_actual = pd.to_numeric(valor_fila(hoja_stock, encabezados_stock, fila_stock, "Stock Actual"), errors="coerce")
+                    stock_actual = 0.0 if pd.isna(stock_actual) else float(stock_actual)
+                    stock_nuevo = stock_actual + float(cantidad)
+                    hoja_stock.cell(fila_stock, encabezados_stock[normalizar("Stock Actual")], stock_nuevo)
+                    for campo, valor in [("Factura / Guia", factura.strip()), ("Tipo", tipo.strip()), ("Bodega", bodega.strip()), ("Proveedor", proveedor.strip())]:
+                        if valor:
+                            hoja_stock.cell(fila_stock, encabezados_stock[normalizar(campo)], valor)
+                guardar_libro(libro)
+                st.success(f"Entrada registrada: {cantidad:g} {unidad} de {nombre}. Stock actualizado: {stock_nuevo:g} {unidad}.")
+                st.rerun()
+            except Exception as error:
+                mostrar_error_excel(error)
+
+with tab_salida:
+    st.subheader("Registrar salida de productos")
+    try:
+        _, _, productos_stock = cargar_stock()
+    except Exception as error:
+        mostrar_error_excel(error)
+        productos_stock = []
+
+    disponibles = [p for p in productos_stock if p.get("Nombre Producto")]
+    if not disponibles:
+        st.info("No hay productos registrados en la pestaña Stock.")
     else:
-        df_mov_mostrar = df_mov.sort_values(by="Fecha", ascending=False)
-        st.dataframe(df_mov_mostrar, use_container_width=True, hide_index=True)
+        opciones = {
+            f"{p.get('Nombre Producto')} | Código: {p.get('Codigo Barras') or 'sin código'} | Stock: {p.get('Stock Actual') or 0} {p.get('Unidad Medida') or ''}": p
+            for p in disponibles
+        }
+        with st.form("form_salida", clear_on_submit=True):
+            seleccion = st.selectbox("Producto*", list(opciones.keys()))
+            producto_seleccionado = opciones[seleccion]
+            col1, col2 = st.columns(2)
+            with col1:
+                cantidad_salida = st.number_input("Cantidad que sale*", min_value=0.01, step=1.0)
+                campo = st.text_input("Campo")
+                variedad = st.text_input("Variedad")
+            with col2:
+                cuartel = st.text_input("Cuartel")
+                responsable = st.text_input("Responsable")
+            guardar_salida = st.form_submit_button("Guardar salida", type="primary")
+
+        if guardar_salida:
+            try:
+                libro = abrir_libro()
+                hoja_stock = libro[HOJA_STOCK]
+                hoja_salida = libro[HOJA_SALIDAS]
+                encabezados_stock = obtener_encabezados(hoja_stock)
+                encabezados_salida = obtener_encabezados(hoja_salida)
+                codigo_producto = producto_seleccionado.get("Codigo Barras")
+                nombre_producto = producto_seleccionado.get("Nombre Producto")
+                fila_stock = encontrar_producto(hoja_stock, encabezados_stock, codigo_producto, nombre_producto)
+                if fila_stock is None:
+                    st.error("No se encontró el producto en Stock. Recarga la página y vuelve a intentarlo.")
+                else:
+                    stock_actual = pd.to_numeric(valor_fila(hoja_stock, encabezados_stock, fila_stock, "Stock Actual"), errors="coerce")
+                    stock_actual = 0.0 if pd.isna(stock_actual) else float(stock_actual)
+                    if float(cantidad_salida) > stock_actual:
+                        st.error(f"Stock insuficiente. Disponible: {stock_actual:g} {producto_seleccionado.get('Unidad Medida') or ''}.")
+                    else:
+                        registro_salida = {
+                            "Codigo Barras": codigo_producto, "Fecha": datetime.now(),
+                            "Nombre del Producto": nombre_producto, "Cantidad": float(cantidad_salida),
+                            "Unidad de Medida": producto_seleccionado.get("Unidad Medida"),
+                            "Campo": campo.strip(), "Variedad": variedad.strip(),
+                            "Cuartel": cuartel.strip(), "Responsable": responsable.strip(),
+                        }
+                        anexar_registro(hoja_salida, encabezados_salida, ENCABEZADOS_SALIDA, registro_salida)
+                        stock_nuevo = stock_actual - float(cantidad_salida)
+                        hoja_stock.cell(fila_stock, encabezados_stock[normalizar("Stock Actual")], stock_nuevo)
+                        guardar_libro(libro)
+                        st.success(f"Salida registrada: {cantidad_salida:g} {producto_seleccionado.get('Unidad Medida') or ''} de {nombre_producto}. Stock restante: {stock_nuevo:g}.")
+                        st.rerun()
+            except Exception as error:
+                mostrar_error_excel(error)
+
+with tab_stock:
+    st.subheader("Existencias actuales (pestaña Stock)")
+    try:
+        _, _, registros_stock = cargar_stock()
+        if registros_stock:
+            df_stock = pd.DataFrame(registros_stock).rename(columns={
+                "Codigo Barras": "Código de barras",
+                "Factura / Guia": "Factura / Guía",
+                "Nombre Producto": "Nombre del producto",
+                "Stock Actual": "Stock actual",
+                "Unidad Medida": "Unidad de medida",
+            })
+            st.dataframe(df_stock, use_container_width=True, hide_index=True)
+        else:
+            st.info("La pestaña Stock todavía no contiene productos.")
+    except Exception as error:
+        mostrar_error_excel(error)
+
+with tab_historial:
+    st.subheader("Historial de ingresos")
+    try:
+        libro = abrir_libro()
+        ingresos = leer_registros(libro[HOJA_INGRESOS], ENCABEZADOS_INGRESO)
+        if ingresos:
+            st.dataframe(pd.DataFrame(ingresos), use_container_width=True, hide_index=True)
+        else:
+            st.info("Todavía no hay ingresos registrados.")
+
+        st.subheader("Movimientos de salida")
+        salidas = leer_registros(libro[HOJA_SALIDAS], ENCABEZADOS_SALIDA)
+        if salidas:
+            st.dataframe(pd.DataFrame(salidas), use_container_width=True, hide_index=True)
+        else:
+            st.info("Todavía no hay salidas registradas.")
+    except Exception as error:
+        mostrar_error_excel(error)
