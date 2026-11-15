@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, range_boundaries
 
 st.set_page_config(
     page_title="Gestión de Inventario y Trazabilidad",
@@ -13,8 +14,80 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("📦 Gestión de Inventario y Trazabilidad")
-st.caption("Registro de ingresos, salidas y existencias del inventario.")
+# Imagen guardada en la carpeta de OneDrive que aparece en tu captura.
+# Si la guardas en otra ubicación, define la variable de entorno INVENTARIO_LOGO.
+RUTA_LOGO_PREDETERMINADA = (
+    Path.home()
+    / "OneDrive - Personal"
+    / "CYO gestion traz e inventario"
+    / "Gestion de inventario y trazabilidad.png"
+)
+LOGO_FILE = Path(os.environ.get("INVENTARIO_LOGO", str(RUTA_LOGO_PREDETERMINADA))).expanduser()
+
+# Tema oscuro sencillo para toda la interfaz.
+st.markdown(
+    """
+    <style>
+      :root { color-scheme: dark; }
+      [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+        background: #101010;
+        color: #f5f5f5;
+      }
+      [data-testid="stHeader"] { background: #101010; }
+      [data-testid="stSidebar"] { background: #181818; }
+      [data-testid="stVerticalBlock"] { color: #f2f2f2; }
+      h1, h2, h3, p, label, [data-testid="stCaptionContainer"] {
+        color: #f2f2f2 !important;
+      }
+      [data-testid="stForm"], [data-testid="stDataFrame"] {
+        background: #181818;
+        border: 1px solid #333;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      [data-baseweb="input"] > div, [data-baseweb="textarea"] > div,
+      [data-baseweb="select"] > div, [data-testid="stNumberInput"] div {
+        background-color: #222 !important;
+        color: #f5f5f5 !important;
+        border-color: #444 !important;
+      }
+      input, textarea { color: #f5f5f5 !important; }
+      [data-testid="stTabs"] [role="tablist"] {
+        gap: 8px;
+        border-bottom: 1px solid #444;
+      }
+      [data-testid="stTabs"] button[role="tab"] {
+        color: #ddd;
+        background: #1b1b1b;
+        border-radius: 8px 8px 0 0;
+      }
+      [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+        color: #fff;
+        background: #333;
+      }
+      [data-testid="stFormSubmitButton"] button,
+      [data-testid="stButton"] button {
+        background: #303030;
+        color: #fff;
+        border: 1px solid #555;
+        border-radius: 8px;
+      }
+      [data-testid="stFormSubmitButton"] button:hover,
+      [data-testid="stButton"] button:hover {
+        background: #444;
+        border-color: #888;
+        color: #fff;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+if LOGO_FILE.is_file():
+    st.image(str(LOGO_FILE), width=700)
+
+st.title("Gestión de Inventario y Trazabilidad")
+st.caption("Registra entradas y salidas, y consulta el stock disponible.")
 
 # Puedes definir INVENTARIO_EXCEL como variable de entorno si guardas el archivo
 # en otra ubicación. Por defecto se busca en la carpeta de OneDrive indicada.
@@ -106,9 +179,9 @@ def anexar_registro(hoja, encabezados, columnas, registro):
         hoja.cell(fila_nueva, encabezados[normalizar(nombre)], registro.get(nombre))
     # Amplía el rango de las tablas de Excel para incluir la fila añadida.
     for tabla in hoja.tables.values():
-        min_col, min_fila, max_col, max_fila = __import__("openpyxl").utils.range_boundaries(tabla.ref)
+        min_col, min_fila, max_col, max_fila = range_boundaries(tabla.ref)
         if min_fila <= 1 <= max_fila and fila_nueva > max_fila:
-            tabla.ref = f"{__import__('openpyxl').utils.get_column_letter(min_col)}{min_fila}:{__import__('openpyxl').utils.get_column_letter(max_col)}{fila_nueva}"
+            tabla.ref = f"{get_column_letter(min_col)}{min_fila}:{get_column_letter(max_col)}{fila_nueva}"
     return fila_nueva
 
 
@@ -162,7 +235,7 @@ if not EXCEL_FILE.is_file():
     st.stop()
 
 try:
-    libro_actual = abrir_libro()
+    abrir_libro()
 except Exception as error:
     mostrar_error_excel(error)
     st.stop()
@@ -209,19 +282,8 @@ with tab_entrada:
                     "Unidad Medida": unidad.strip(), "Bodega": bodega.strip(),
                     "Proveedor": proveedor.strip(),
                 }
-                anexar_registro(hoja_ingreso, encabezados_ingreso, ENCABEZADOS_INGRESO, registro_ingreso)
-
                 fila_stock = encontrar_producto(hoja_stock, encabezados_stock, codigo, nombre)
-                if fila_stock is None:
-                    registro_stock = {
-                        "Codigo Barras": codigo.strip(), "Factura / Guia": factura.strip(),
-                        "Nombre Producto": nombre.strip(), "Tipo": tipo.strip(),
-                        "Stock Actual": float(cantidad), "Unidad Medida": unidad.strip(),
-                        "Bodega": bodega.strip(), "Proveedor": proveedor.strip(),
-                    }
-                    anexar_registro(hoja_stock, encabezados_stock, ENCABEZADOS_STOCK, registro_stock)
-                    stock_nuevo = float(cantidad)
-                else:
+                if fila_stock is not None:
                     unidad_actual = valor_fila(hoja_stock, encabezados_stock, fila_stock, "Unidad Medida")
                     if normalizar(unidad_actual) != normalizar(unidad):
                         st.error(f"La unidad registrada para este producto es '{unidad_actual}'. No se guardó el movimiento para evitar mezclar unidades.")
@@ -233,6 +295,17 @@ with tab_entrada:
                     for campo, valor in [("Factura / Guia", factura.strip()), ("Tipo", tipo.strip()), ("Bodega", bodega.strip()), ("Proveedor", proveedor.strip())]:
                         if valor:
                             hoja_stock.cell(fila_stock, encabezados_stock[normalizar(campo)], valor)
+                else:
+                    registro_stock = {
+                        "Codigo Barras": codigo.strip(), "Factura / Guia": factura.strip(),
+                        "Nombre Producto": nombre.strip(), "Tipo": tipo.strip(),
+                        "Stock Actual": float(cantidad), "Unidad Medida": unidad.strip(),
+                        "Bodega": bodega.strip(), "Proveedor": proveedor.strip(),
+                    }
+                    anexar_registro(hoja_stock, encabezados_stock, ENCABEZADOS_STOCK, registro_stock)
+                    stock_nuevo = float(cantidad)
+
+                anexar_registro(hoja_ingreso, encabezados_ingreso, ENCABEZADOS_INGRESO, registro_ingreso)
                 guardar_libro(libro)
                 st.success(f"Entrada registrada: {cantidad:g} {unidad} de {nombre}. Stock actualizado: {stock_nuevo:g} {unidad}.")
                 st.rerun()
